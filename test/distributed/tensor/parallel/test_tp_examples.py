@@ -4,17 +4,11 @@
 import torch
 import torch.distributed as dist
 from torch.distributed._tensor import DeviceMesh, DTensor, Replicate, Shard
-from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
-    checkpoint_wrapper,
-    CheckpointImpl,
-)
 from torch.distributed.tensor.parallel import (
     ColwiseParallel,
-    PairwiseParallel,
     parallelize_module,
     RowwiseParallel,
 )
-from torch.distributed.tensor.parallel.input_reshard import input_reshard
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     parametrize,
@@ -62,7 +56,7 @@ class DistTensorParallelExampleTest(DTensorTestBase):
             self.device_type,
             torch.arange(0, NUM_DEVICES),
         )
-        parallel_style = {
+        parallelize_plan = {
             "net1": ColwiseParallel(input_layouts=Shard(0))
             if is_seq_parallel
             else ColwiseParallel(),
@@ -70,15 +64,7 @@ class DistTensorParallelExampleTest(DTensorTestBase):
             if is_seq_parallel
             else RowwiseParallel(),
         }
-        model_tp = parallelize_module(model_tp, device_mesh, parallel_style)
-        if recompute_activation:
-            model_tp = input_reshard(
-                checkpoint_wrapper(
-                    model_tp, checkpoint_impl=CheckpointImpl.NO_REENTRANT
-                ),
-                device_mesh,
-                None if is_seq_parallel else 0,
-            )
+        model_tp = parallelize_module(model_tp, device_mesh, parallelize_plan)
         optim = torch.optim.SGD(model.parameters(), lr=LR)
         optim_tp = torch.optim.SGD(model_tp.parameters(), lr=LR)
 
@@ -124,7 +110,11 @@ class DistTensorParallelExampleTest(DTensorTestBase):
         self._check_module(model, model_tp)
 
         # Shard module and initialize optimizer.
-        model_tp = parallelize_module(model_tp, device_mesh, PairwiseParallel())
+        parallelize_plan = {
+            "net1": ColwiseParallel(),
+            "net2": RowwiseParallel(),
+        }
+        model_tp = parallelize_module(model_tp, device_mesh, parallelize_plan)
 
         output = model(inp)
         output_tp = model_tp(inp)
